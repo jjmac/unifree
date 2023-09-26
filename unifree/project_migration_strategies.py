@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-# Copyright (c) AppLovin. and its affiliates. All rights reserved.
+
+# Copyright (c) Unifree
+# This code is licensed under MIT license (see LICENSE.txt for details)
+
 import os.path
+import traceback
 from abc import ABC
-from multiprocessing import cpu_count
 from typing import List, Union, Dict, Optional, Iterable
 
-from tqdm.contrib.concurrent import process_map
+from tqdm.contrib.concurrent import thread_map
 
 from unifree import log, MigrationStrategy, utils, FileMigrationSpec
 
@@ -16,11 +19,7 @@ class ConcurrentMigrationStrategy(MigrationStrategy, ABC):
         super().__init__(config)
 
     def map_concurrently(self, fn, iterables, **tqdm_kwargs) -> Iterable:
-        # Run verbose mode jobs in a single thread
-        if self.config["verbose"]:
-            return map(fn, iterables)
-        else:
-            return process_map(fn, iterables, **tqdm_kwargs)
+        return thread_map(fn, iterables, **tqdm_kwargs)
 
 
 class CreateMigrations(ConcurrentMigrationStrategy):
@@ -65,8 +64,9 @@ class CreateMigrations(ConcurrentMigrationStrategy):
 
         log.info(f"Computing migration strategies for {len(project_files):,} files...")
         results = self.map_concurrently(
-            self._map_file_path_to_migration, project_files,
-            max_workers=int(cpu_count() // 2),
+            self._map_file_path_to_migration,
+            project_files,
+            max_workers=self.config["concurrency"]["create_strategy_worker"] if self.config["concurrency"]["create_strategy_worker"] else 1,
             unit='path',
             chunksize=1,
         )
@@ -121,6 +121,7 @@ class CreateMigrations(ConcurrentMigrationStrategy):
                     return self._create_migration_strategy(strategy_name, spec)
             return None
         except Exception as e:
+            traceback.print_exc()
             return f"'{file_path}' failed to create strategy: {e}"
 
     def _create_migration_strategy(self, strategy_name: str, spec: FileMigrationSpec) -> MigrationStrategy:
@@ -134,6 +135,9 @@ class CreateMigrations(ConcurrentMigrationStrategy):
     def _initialize_shared_objects(self):
         from unifree.source_code_parsers import CSharpCodeParser
         CSharpCodeParser.initialize()
+
+        from unifree.known_translations_db import KnownTranslationsDb
+        KnownTranslationsDb.initialize_instance(self.config)
 
     def _check_if_source_is_unity_project(self):
         files = os.listdir(self._source_path)
@@ -156,7 +160,7 @@ class ExecuteMigrations(ConcurrentMigrationStrategy):
 
         results = self.map_concurrently(
             self._execute_strategy, self._strategies,
-            max_workers=cpu_count(),
+            max_workers=self.config["concurrency"]["execute_strategy_workers"] if self.config["concurrency"]["execute_strategy_workers"] else 1,
             unit='file',
             chunksize=1,
         )

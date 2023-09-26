@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
-# Copyright (c) AppLovin. and its affiliates. All rights reserved.
+
+# Copyright (c) Unifree
+# This code is licensed under MIT license (see LICENSE.txt for details)
+
 import importlib
 import os
 import re
+import threading
 from collections import defaultdict
-from typing import Type, Dict, Any
+from typing import Type, Dict, Any, TypeVar, Callable
 
 import yaml
+
+from unifree import LLM
 
 
 def load_config(config_name: str) -> Dict[str, Any]:
     from unifree import log
+    import unifree
 
-    config_file_name = f"configs/{config_name}.yaml"
-    for potential_config_path in [config_file_name, os.path.join("..", config_file_name)]:
-        if os.path.exists(potential_config_path) and os.path.isfile(config_file_name):
-            config_file_name = potential_config_path
-            break
-
+    config_folder_path = os.path.join(unifree.project_root, "configs")
+    config_file_name = os.path.join(config_folder_path, f"{config_name}.yaml")
     if not os.path.exists(config_file_name) or not os.path.isfile(config_file_name):
         supported_destinations = []
-        for config_file_name in os.listdir("config/"):
+        for config_file_name in os.listdir(config_folder_path):
             if config_file_name.endswith(".yaml"):
                 supported_destinations.append(config_file_name.replace(".yaml", ""))
 
@@ -47,6 +50,11 @@ def load_class(class_name: str, module: str) -> Type:
     return loaded_class
 
 
+def load_llm(config: Dict) -> LLM:
+    llm_class = load_class(config["class"], "llms")
+    return llm_class(config)
+
+
 def camel_to_snake(camel_case_str: str) -> str:
     snake_case_str = re.sub(r'([a-z])([A-Z])', r'\1_\2', camel_case_str)
     return snake_case_str.lower()
@@ -69,3 +77,21 @@ def to_default_dict(d):
 
 def _return_none():
     return None
+
+
+InstanceType = TypeVar('InstanceType')
+
+_global_instances: Dict[str, Any] = {}
+_global_instances_lock: threading.Lock = threading.Lock()
+
+
+def get_or_create_global_instance(name: str, new_instance_creator: Callable[[], InstanceType]) -> InstanceType:
+    global _global_instances
+    global _global_instances_lock
+
+    if name not in _global_instances:
+        with _global_instances_lock:
+            if name not in _global_instances:
+                _global_instances[name] = new_instance_creator()
+
+    return _global_instances[name]
